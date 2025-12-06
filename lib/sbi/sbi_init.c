@@ -33,6 +33,7 @@
 #include <sbi/sbi_tlb.h>
 #include <sbi/sbi_version.h>
 #include <sbi/sbi_unit_test.h>
+#include <sbi/riscv_worldguard.h>
 
 #define BANNER                                              \
 	"   ____                    _____ ____ _____\n"     \
@@ -363,6 +364,12 @@ static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
 		sbi_printf("%s: ecall init failed (error %d)\n", __func__, rc);
 		sbi_hart_hang();
 	}
+
+	/*
+	 * Note: WorldGuard initialization is optional
+	 * If WorldGuard is not available, this will silently skip
+	 */
+	sbi_worldguard_init(scratch, hartid);
 
 	sbi_boot_print_general(scratch);
 
