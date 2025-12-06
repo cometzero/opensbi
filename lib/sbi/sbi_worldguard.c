@@ -53,6 +53,30 @@ static int worldguard_parse_fdt(void)
 		return SBI_ENODEV;
 	}
 
+	/* Check if SPL already initialized WorldGuard (T036-T038) */
+	val = fdt_getprop(fdt, nodeoff, "spl-initialized", &len);
+	if (val && len >= sizeof(fdt32_t) && fdt32_to_cpu(*val) == 1) {
+		sbi_printf("WorldGuard: Already initialized by SPL\n");
+		
+		/* Read SPL configuration */
+		val = fdt_getprop(fdt, nodeoff, "mlwid", &len);
+		if (val && len >= sizeof(fdt32_t)) {
+			wg_info.trustedwid = fdt32_to_cpu(*val);
+		}
+		
+		val = fdt_getprop(fdt, nodeoff, "mwiddeleg", &len);
+		if (val && len >= sizeof(fdt32_t)) {
+			wg_info.mwiddeleg = fdt32_to_cpu(*val);
+		}
+		
+		sbi_printf("WorldGuard: SPL config - mlwid=%u, mwiddeleg=0x%x\n",
+			   wg_info.trustedwid, wg_info.mwiddeleg);
+		
+		/* Mark as enabled but skip CSR programming */
+		wg_info.enabled = true;
+		return SBI_ESKIP;  /* Special return code: skip CSR init */
+	}
+
 	/* Parse nworlds property */
 	val = fdt_getprop(fdt, nodeoff, "nworlds", &len);
 	if (val && len >= sizeof(fdt32_t)) {
@@ -218,36 +242,51 @@ static int wgchecker_parse_and_program_fdt(void)
 int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 {
 	int rc;
+	int ret;
 
 	/* Only initialize on cold boot hart */
 	if (scratch == NULL)
 		return SBI_EINVAL;
 
-	/* Try to parse FDT for WorldGuard configuration */
-	rc = worldguard_parse_fdt();
-	if (rc) {
-		/* No WorldGuard DT node - use defaults or skip */
-		sbi_printf("WorldGuard: No FDT node found, using defaults\n");
-	}
-
-	/* Detect WorldGuard presence by reading CSR */
-	rc = worldguard_detect();
-	if (rc) {
-		/* WorldGuard not available - silent skip */
-		wg_info.enabled = false;
+	/* Parse Device Tree configuration */
+	ret = worldguard_parse_fdt();
+	if (ret == SBI_ENODEV) {
+		/* No WorldGuard - silent skip */
 		return 0;
 	}
+	
+	if (ret == SBI_ESKIP) {
+		/* SPL already initialized - skip CSR programming (T039-T040) */
+		sbi_printf("WorldGuard: Skipping CSR programming (SPL initialized)\n");
+		return 0;
+	}
+	
+	if (ret != 0) {
+		sbi_printf("WorldGuard: FDT parsing failed: %d\n", ret);
+		return ret;
+	}
 
-	/* Initialize CSRs with configured values */
-	worldguard_init_csrs();
+	sbi_printf("WorldGuard: detected, nworlds=%u trustedwid=%u mwiddeleg=0x%x\n",
+		   wg_info.nworlds, wg_info.trustedwid, wg_info.mwiddeleg);
 
-	/* Program wgChecker slots if defined in FDT */
-	wgchecker_parse_and_program_fdt();
+	/* Initialize WorldGuard CSRs */
+	csr_write(CSR_MLWID, wg_info.trustedwid);
+	csr_write(CSR_MWIDDELEG, wg_info.mwiddeleg);
 
+	/* Parse and program wgChecker slots */
+	ret = wgchecker_parse_and_program_fdt();
+	if (ret == SBI_ENODEV) {
+		/* No wgChecker - not an error */
+		sbi_printf("WorldGuard: No wgChecker configuration\n");
+	} else if (ret != 0) {
+		sbi_printf("WorldGuard: wgChecker programming failed: %d\n", ret);
+		return ret;
+	}
+
+	/* Mark as enabled */
 	wg_info.enabled = true;
-
-	sbi_printf("WorldGuard: enabled, mlwid=%u, mwiddeleg=0x%x\n",
-		   wg_info.trustedwid, wg_info.mwiddeleg);
+	sbi_printf("WorldGuard: initialization complete\n");
 
 	return 0;
 }
+```
