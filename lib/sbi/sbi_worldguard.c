@@ -122,6 +122,99 @@ static void worldguard_init_csrs(void)
 	csr_write(CSR_MWIDDELEG, wg_info.mwiddeleg);
 }
 
+/**
+ * Write to wgChecker MMIO register
+ */
+static inline void wgchecker_write64(unsigned long addr, u64 val)
+{
+	*(volatile u64 *)addr = val;
+}
+
+static inline void wgchecker_write32(unsigned long addr, u32 val)
+{
+	*(volatile u32 *)addr = val;
+}
+
+/**
+ * Program a single wgChecker slot
+ * @param slot_num: Slot number (1-based, slot 0 is implicit)
+ * @param addr: End address for TOR mode
+ * @param perm: Permission bits (2 bits per WID)
+ * @param cfg: Configuration (TOR/NAPOT + Lock bit)
+ */
+static void wgchecker_program_slot(int slot_num, u64 addr, u32 perm, u32 cfg)
+{
+	unsigned long slot_addr = WGCHECKER_SLOT_ADDR(slot_num);
+	unsigned long slot_perm = WGCHECKER_SLOT_PERM(slot_num);
+	unsigned long slot_cfg = WGCHECKER_SLOT_CFG(slot_num);
+
+	wgchecker_write64(slot_addr, addr);
+	wgchecker_write32(slot_perm, perm);
+	wgchecker_write32(slot_cfg, cfg);
+
+	sbi_printf("  slot[%d]: addr=0x%lx perm=0x%x cfg=0x%x\n",
+		   slot_num, (unsigned long)addr, perm, cfg);
+}
+
+/**
+ * Parse and program wgChecker slots from Device Tree
+ */
+static int wgchecker_parse_and_program_fdt(void)
+{
+	const void *fdt = fdt_get_address();
+	int nodeoff, len, i;
+	const fdt32_t *slots;
+	int num_slots;
+
+	if (!fdt)
+		return SBI_ENODEV;
+
+	/* Find wgchecker node */
+	nodeoff = fdt_node_offset_by_compatible(fdt, -1, "riscv,wgchecker");
+	if (nodeoff < 0) {
+		/* No wgChecker node - skip slot programming */
+		return SBI_ENODEV;
+	}
+
+	/* Parse slots property: <addr_hi addr_lo size_hi size_lo perm cfg> */
+	slots = fdt_getprop(fdt, nodeoff, "slots", &len);
+	if (!slots || len < 6 * sizeof(fdt32_t)) {
+		sbi_printf("WorldGuard: wgChecker has no valid slots\n");
+		return SBI_ENODEV;
+	}
+
+	/* Each slot is 6 u32 values */
+	num_slots = len / (6 * sizeof(fdt32_t));
+
+	sbi_printf("WorldGuard: Programming %d wgChecker slots\n", num_slots);
+
+	for (i = 0; i < num_slots; i++) {
+		u64 addr, size, end_addr;
+		u32 perm, cfg;
+		int base = i * 6;
+
+		/* Parse addr (64-bit) */
+		addr = ((u64)fdt32_to_cpu(slots[base]) << 32) |
+		       fdt32_to_cpu(slots[base + 1]);
+
+		/* Parse size (64-bit) */
+		size = ((u64)fdt32_to_cpu(slots[base + 2]) << 32) |
+		       fdt32_to_cpu(slots[base + 3]);
+
+		/* For TOR mode, end_addr = addr + size */
+		end_addr = addr + size;
+
+		/* Parse perm and cfg */
+		perm = fdt32_to_cpu(slots[base + 4]);
+		cfg = fdt32_to_cpu(slots[base + 5]);
+
+		/* Program slot (1-based index) */
+		wgchecker_program_slot(i + 1, end_addr, perm, cfg);
+	}
+
+	return 0;
+}
+
 int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 {
 	int rc;
@@ -148,6 +241,9 @@ int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 	/* Initialize CSRs with configured values */
 	worldguard_init_csrs();
 
+	/* Program wgChecker slots if defined in FDT */
+	wgchecker_parse_and_program_fdt();
+
 	wg_info.enabled = true;
 
 	sbi_printf("WorldGuard: enabled, mlwid=%u, mwiddeleg=0x%x\n",
@@ -155,4 +251,3 @@ int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 
 	return 0;
 }
-
