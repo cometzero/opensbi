@@ -156,6 +156,20 @@ static void mstatus_init(struct sbi_scratch *scratch)
 		csr_write(CSR_MENVCFGH, menvcfg_val >> 32);
 #endif
 
+		/*
+		 * If H extension is available and sstc extension is enabled,
+		 * also enable STCE in henvcfg. This is required for proper
+		 * VSTIP handling in QEMU after commit 3cb2edae which fixed
+		 * the VSTIP writability behavior.
+		 */
+		if (misa_extension('H') &&
+		    sbi_hart_has_extension(scratch, SBI_HART_EXT_SSTC)) {
+			csr_set(CSR_HENVCFG, ENVCFG_STCE);
+#if __riscv_xlen == 32
+			csr_set(CSR_HENVCFGH, ENVCFG_STCE >> 32);
+#endif
+		}
+
 		/* Enable S-mode access to seed CSR */
 		if (sbi_hart_has_extension(scratch, SBI_HART_EXT_ZKR)) {
 			csr_set(CSR_MSECCFG, MSECCFG_SSEED);
