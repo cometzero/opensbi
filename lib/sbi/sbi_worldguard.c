@@ -11,6 +11,7 @@
 #include <sbi/sbi_console.h>
 #include <sbi/sbi_scratch.h>
 #include <sbi/sbi_error.h>
+#include <sbi/sbi_string.h>
 #include <sbi_utils/fdt/fdt_helper.h>
 #include <libfdt.h>
 
@@ -37,6 +38,36 @@ const struct sbi_worldguard_info *sbi_worldguard_get_info(void)
  * Parse WorldGuard configuration from Device Tree
  * Returns 0 if WorldGuard node found and parsed, negative otherwise
  */
+static bool worldguard_cpu_has_ext(const void *fdt, int cpuoff, const char *ext)
+{
+	const char *list;
+	const char *isa;
+	int len;
+	size_t ext_len;
+	size_t isa_len;
+	int i;
+
+	list = fdt_getprop(fdt, cpuoff, "riscv,isa-extensions", &len);
+	if (list && fdt_stringlist_contains(list, len, ext))
+		return true;
+
+	isa = fdt_getprop(fdt, cpuoff, "riscv,isa", &len);
+	if (!isa || len <= 0)
+		return false;
+
+	ext_len = sbi_strlen(ext);
+	isa_len = sbi_strnlen(isa, len);
+	if (ext_len == 0 || isa_len < ext_len)
+		return false;
+
+	for (i = 0; i + ext_len <= isa_len; i++) {
+		if (!sbi_strncmp(isa + i, ext, ext_len))
+			return true;
+	}
+
+	return false;
+}
+
 static int worldguard_parse_fdt(void)
 {
 	const void *fdt = fdt_get_address();
@@ -57,25 +88,34 @@ static int worldguard_parse_fdt(void)
 	val = fdt_getprop(fdt, nodeoff, "spl-initialized", &len);
 	if (val && len >= sizeof(fdt32_t) && fdt32_to_cpu(*val) == 1) {
 		sbi_printf("WorldGuard: Already initialized by SPL\n");
-		
+
 		/* Read SPL configuration */
 		val = fdt_getprop(fdt, nodeoff, "mlwid", &len);
 		if (val && len >= sizeof(fdt32_t)) {
 			wg_info.trustedwid = fdt32_to_cpu(*val);
 		}
-		
+
 		val = fdt_getprop(fdt, nodeoff, "mwiddeleg", &len);
 		if (val && len >= sizeof(fdt32_t)) {
 			wg_info.mwiddeleg = fdt32_to_cpu(*val);
 		}
-		
+
 		sbi_printf("WorldGuard: SPL config - mlwid=%u, mwiddeleg=0x%x\n",
 			   wg_info.trustedwid, wg_info.mwiddeleg);
-		
-		/* Mark as enabled but skip CSR programming */
+
 		wg_info.enabled = true;
-		return SBI_ESKIP;  /* Special return code: skip CSR init */
+		return SBI_EALREADY;
 	}
+
+	val = fdt_getprop(fdt, nodeoff, "status", &len);
+	if (val && len > 0 && !fdt_stringlist_contains((const char *)val, len, "okay"))
+		return SBI_ENODEV;
+
+	if (fdt_node_offset_by_compatible(fdt, -1, "riscv") < 0)
+		return SBI_ENODEV;
+
+	if (!worldguard_cpu_has_ext(fdt, fdt_node_offset_by_compatible(fdt, -1, "riscv"), "smwg"))
+		return SBI_ENODEV;
 
 	/* Parse nworlds property */
 	val = fdt_getprop(fdt, nodeoff, "nworlds", &len);
@@ -106,44 +146,6 @@ static int worldguard_parse_fdt(void)
 		   wg_info.nworlds, wg_info.trustedwid);
 
 	return 0;
-}
-
-/**
- * Try to read WorldGuard CSR to detect if extension is present
- * Returns 0 if WorldGuard is available, negative error otherwise
- */
-static int worldguard_detect(void)
-{
-	unsigned long val;
-
-	/*
-	 * Try to read mlwid CSR. If WorldGuard extension is not present,
-	 * this will cause an illegal instruction exception.
-	 * For now, we assume WorldGuard is present if we reach this code.
-	 * TODO: Add proper trap-based detection.
-	 */
-
-	/* Read current mlwid value */
-	val = csr_read(CSR_MLWID);
-
-	/* If we get here, WorldGuard CSRs are accessible */
-	sbi_printf("WorldGuard: detected, current mlwid=%lu\n", val);
-
-	return 0;
-}
-
-/**
- * Initialize WorldGuard CSRs with configured values
- * Note: slwid (0x190) is an S-mode CSR, it will be set by U-Boot/Linux
- * OpenSBI only sets M-mode CSRs: mlwid and mwiddeleg
- */
-static void worldguard_init_csrs(void)
-{
-	/* Set M-mode WID to trusted WID */
-	csr_write(CSR_MLWID, wg_info.trustedwid);
-
-	/* Delegate WIDs to S-mode - slwid will be set by S-mode software */
-	csr_write(CSR_MWIDDELEG, wg_info.mwiddeleg);
 }
 
 /**
@@ -241,7 +243,6 @@ static int wgchecker_parse_and_program_fdt(void)
 
 int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 {
-	int rc;
 	int ret;
 
 	/* Only initialize on cold boot hart */
@@ -255,8 +256,7 @@ int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 		return 0;
 	}
 	
-	if (ret == SBI_ESKIP) {
-		/* SPL already initialized - skip CSR programming (T039-T040) */
+	if (ret == SBI_EALREADY) {
 		sbi_printf("WorldGuard: Skipping CSR programming (SPL initialized)\n");
 		return 0;
 	}
@@ -289,4 +289,3 @@ int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 
 	return 0;
 }
-```
