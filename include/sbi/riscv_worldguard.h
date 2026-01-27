@@ -34,12 +34,27 @@
 #define WGCHECKER_SIZE          0x1000
 
 /*
- * wgChecker slot register offsets
- * Each slot: addr(8) + perm(4) + cfg(4) = 16 bytes
+ * wgChecker register layout (QEMU virt machine model)
+ *
+ * Base registers:
+ *  - 0x000: VENDOR (u32)
+ *  - 0x004: IMPID  (u32)
+ *  - 0x008: NSLOTS (u32)
+ *  - 0x010: ERRCAUSE (u64)
+ *  - 0x018: ERRADDR  (u64)
+ * Slots region:
+ *  - 0x020 + n*0x20: slot[n]
+ *      0x00: SLOT_ADDR (u64)  (slot-address format)
+ *      0x08: SLOT_PERM (u64)
+ *      0x10: SLOT_CFG  (u32)
  */
-#define WGCHECKER_SLOT_ADDR(n)  (WGCHECKER_BASE_ADDR + 0x100 + (n) * 16)
-#define WGCHECKER_SLOT_PERM(n)  (WGCHECKER_BASE_ADDR + 0x100 + (n) * 16 + 8)
-#define WGCHECKER_SLOT_CFG(n)   (WGCHECKER_BASE_ADDR + 0x100 + (n) * 16 + 12)
+#define WGCHECKER_SLOT_BASE(n)  (WGCHECKER_BASE_ADDR + 0x020 + ((n) * 0x20))
+#define WGCHECKER_SLOT_ADDR(n)  (WGCHECKER_SLOT_BASE(n) + 0x00)
+#define WGCHECKER_SLOT_PERM(n)  (WGCHECKER_SLOT_BASE(n) + 0x08)
+#define WGCHECKER_SLOT_CFG(n)   (WGCHECKER_SLOT_BASE(n) + 0x10)
+
+/* Slot address format: physical_addr >> 2 (4-byte granularity) */
+#define WGCHECKER_SLOT_ADDR_FMT(pa) ((pa) >> 2)
 
 /*
  * wgChecker slot configuration bits

@@ -168,18 +168,19 @@ static inline void wgchecker_write32(unsigned long addr, u32 val)
  * @param perm: Permission bits (2 bits per WID)
  * @param cfg: Configuration (TOR/NAPOT + Lock bit)
  */
-static void wgchecker_program_slot(int slot_num, u64 addr, u32 perm, u32 cfg)
+static void wgchecker_program_slot(int slot_num, u64 end_addr, u32 perm, u32 cfg)
 {
 	unsigned long slot_addr = WGCHECKER_SLOT_ADDR(slot_num);
 	unsigned long slot_perm = WGCHECKER_SLOT_PERM(slot_num);
 	unsigned long slot_cfg = WGCHECKER_SLOT_CFG(slot_num);
+	u64 slot_end = WGCHECKER_SLOT_ADDR_FMT(end_addr);
 
-	wgchecker_write64(slot_addr, addr);
-	wgchecker_write32(slot_perm, perm);
+	wgchecker_write64(slot_addr, slot_end);
+	wgchecker_write64(slot_perm, (u64)perm);
 	wgchecker_write32(slot_cfg, cfg);
 
-	sbi_printf("  slot[%d]: addr=0x%lx perm=0x%x cfg=0x%x\n",
-		   slot_num, (unsigned long)addr, perm, cfg);
+	sbi_printf("  slot[%d]: end=0x%lx slot_end=0x%lx perm=0x%x cfg=0x%x\n",
+		   slot_num, (unsigned long)end_addr, (unsigned long)slot_end, perm, cfg);
 }
 
 /**
