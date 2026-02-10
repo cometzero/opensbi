@@ -24,6 +24,12 @@ static struct sbi_worldguard_info wg_info = {
 	.mwiddeleg = WORLDGUARD_DEFAULT_MWIDDELEG,
 };
 
+/* WorldGuard Linux S-mode test scratch addresses (must be DRAM) */
+#define WGTEST_W2_PA	0xBFFF0000ULL
+#define WGTEST_W3_PA	0xAFFF0000ULL
+#define WGTEST_W2_VAL	0x1122334455667788ULL
+#define WGTEST_W3_VAL	0x8877665544332211ULL
+
 bool sbi_worldguard_enabled(void)
 {
 	return wg_info.enabled;
@@ -271,8 +277,10 @@ int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 		   wg_info.nworlds, wg_info.trustedwid, wg_info.mwiddeleg);
 
 	/* Initialize WorldGuard CSRs */
-	csr_write(CSR_MLWID, wg_info.trustedwid);
+	csr_write(CSR_MLWID, wg_info.smodewid);
 	csr_write(CSR_MWIDDELEG, wg_info.mwiddeleg);
+	sbi_printf("WorldGuard: CSRs - mlwid(s-mode)=%u mwiddeleg=0x%x\n",
+		   wg_info.smodewid, wg_info.mwiddeleg);
 
 	/* Parse and program wgChecker slots */
 	ret = wgchecker_parse_and_program_fdt();
@@ -283,6 +291,17 @@ int sbi_worldguard_init(struct sbi_scratch *scratch, u32 cold_hartid)
 		sbi_printf("WorldGuard: wgChecker programming failed: %d\n", ret);
 		return ret;
 	}
+
+	/*
+	 * Test scratch: write patterns as trusted WID (M-mode).
+	 * Linux S-mode (WID=mlwid) should observe WG enforcement when accessing
+	 * these addresses.
+	 */
+	*(volatile u64 *)WGTEST_W2_PA = WGTEST_W2_VAL;
+	*(volatile u64 *)WGTEST_W3_PA = WGTEST_W3_VAL;
+	sbi_printf("WorldGuard: test scratch written w2=0x%llx @0x%llx w3=0x%llx @0x%llx\n",
+		   (unsigned long long)WGTEST_W2_VAL, (unsigned long long)WGTEST_W2_PA,
+		   (unsigned long long)WGTEST_W3_VAL, (unsigned long long)WGTEST_W3_PA);
 
 	/* Mark as enabled */
 	wg_info.enabled = true;
